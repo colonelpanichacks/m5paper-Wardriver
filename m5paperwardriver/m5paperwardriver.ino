@@ -28,6 +28,9 @@ struct GPSData {
 BLEScan* pBLEScan;
 int scanTime = 5;
 
+int mNumWifi = 0;
+int mNumBLE = 0;
+
 File logFile;
 String logFileName = "/WiFiScanLog.csv";
 
@@ -83,14 +86,17 @@ void displayDevices() {
     }
   }
 
-  canvas.createCanvas(540, 960);  // Correct full vertical canvas size
+  String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
+
+  canvas.createCanvas(540, 960);
   canvas.fillCanvas(0);
   canvas.setTextSize(2);
-  canvas.drawString("Discovered Devices (sorted by RSSI):", 10, 10);
+  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  canvas.drawLine(10, 30, 540, 30, 15);
 
   int y = 40;
   for (int i = 0; i < deviceIndex; i++) {
-    canvas.drawString(String(i+1) + ": " + deviceList[i].info, 10, y);
+    canvas.drawString(String(i + 1) + ": " + deviceList[i].info, 10, y);
     y += 30;
     if (y > canvas.height() - 20) {
       canvas.pushCanvas(0, 0, UPDATE_MODE_DU4);
@@ -115,13 +121,17 @@ GPSData getGPSData() {
   return gpsData;
 }
 
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
     String macStr = advertisedDevice.getAddress().toString().c_str();
     String ssidStr = advertisedDevice.getName().c_str();
     int rssi = advertisedDevice.getRSSI();
     const char* mac = macStr.c_str();
     const char* ssid = ssidStr.c_str();
+
+    if (isDuplicate(mac)) {
+      return;
+    }
 
     GPSData gpsData = getGPSData();
     logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
@@ -132,6 +142,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     deviceList[deviceIndex].rssi = rssi;
     deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
     deviceIndex++;
+    mNumBLE ++;
 
     displayDevices();
   }
@@ -149,6 +160,7 @@ void initializeScanning() {
 }
 
 void setup() {
+  Serial.begin(115200);
   M5.begin();
   M5.EPD.SetRotation(1);  // Correct rotation for full vertical (portrait) display
   M5.EPD.Clear(true);
@@ -178,7 +190,7 @@ void loop() {
     Serial.println("Waiting for valid GPS data...");
   }
   // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
-  int n = WiFi.scanNetworks(false,true,false,200); 
+  int n = WiFi.scanNetworks(false,true,false,200);
   if (n > 0) {
     GPSData gpsData = getGPSData();
     for (int i = 0; i < n; ++i) {
@@ -196,6 +208,10 @@ void loop() {
         ssidStr = "HIDDEN";
       }
 
+      if (isDuplicate(bssid)) { // skip to the next
+        continue;
+      }
+
       logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
 
       deviceList[deviceIndex].type = "WiFi";
@@ -204,6 +220,7 @@ void loop() {
       deviceList[deviceIndex].rssi = rssi;
       deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
       deviceIndex++;
+      mNumWifi ++;
 
       displayDevices();
     }
@@ -213,6 +230,15 @@ void loop() {
   pBLEScan->clearResults();
 
   delay(2000);
+}
+
+bool isDuplicate(const char* mac) {
+  for (int i = 0; i < deviceIndex; i++) {
+    if (deviceList[i].mac == String(mac)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const char* getAuthType(uint8_t wifiAuth) {
