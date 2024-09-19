@@ -8,11 +8,22 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
+const String BUILD = "1.0.1";
+const String VERSION = "1.0";
+
 M5EPD_Canvas canvas(&M5.EPD);
 #define SD_CS_PIN 4
 
 HardwareSerial GPS_Serial(1);
 TinyGPSPlus gps;
+
+struct GPSData {
+  String time;
+  double latitude;
+  double longitude;
+  double altitude;
+  double accuracy;
+};
 
 BLEScan* pBLEScan;
 int scanTime = 5;
@@ -33,7 +44,8 @@ int deviceIndex = 0;
 
 void writeCSVHeader() {
   if (logFile) {
-    logFile.println("netid,ssid,lat,lon,accuracy,time,frequency,encryption,signal,type");
+    logFile.println("WigleWifi-1.4,appRelease=" + BUILD + ",model=M5Paper,release=" + VERSION + ",device=M5Paper,display=ePaper,board=ESP32,brand=M5");
+    logFile.println("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type");
     logFile.flush();
   }
 }
@@ -52,10 +64,10 @@ bool initSDCard() {
   return true;
 }
 
-void logToCSV(String netid, String ssid, double lat, double lon, double accuracy, String time, int frequency, String encryption, int signal, String type) {
+void logToCSV(const char* netid, const char* ssid, const char* authType, const char* time, int channel, int signal, double lat, double lon, double altitude, double accuracy, const char* type) {
   if (logFile) {
-    logFile.printf("%s,%s,%.6f,%.6f,%.2f,%s,%d,%s,%d,%s\n",
-                   netid.c_str(), ssid.c_str(), lat, lon, accuracy, time.c_str(), frequency, encryption.c_str(), signal, type.c_str());
+    logFile.printf("%s,\"%s\",%s,%s,%d,%d,%.6f,%.6f,%.2f,%.2f,%s\n",
+                   netid, ssid, authType, time, channel, signal, lat, lon, altitude, accuracy, type);
     logFile.flush();
   }
 }
@@ -91,23 +103,34 @@ void displayDevices() {
   canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 }
 
+GPSData getGPSData() {
+  GPSData gpsData;
+  char utc[21];
+  sprintf(utc, "%04d-%02d-%02d %02d:%02d:%02d", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
+  gpsData.time = String(utc);
+  gpsData.latitude = gps.location.lat();
+  gpsData.longitude = gps.location.lng();
+  gpsData.altitude = gps.altitude.meters();
+  gpsData.accuracy = gps.hdop.hdop();
+  return gpsData;
+}
+
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
-    String mac = advertisedDevice.getAddress().toString().c_str();
-    String ssid = advertisedDevice.getName().c_str();
+    String macStr = advertisedDevice.getAddress().toString().c_str();
+    String ssidStr = advertisedDevice.getName().c_str();
     int rssi = advertisedDevice.getRSSI();
-    double lat = gps.location.lat();
-    double lon = gps.location.lng();
-    double accuracy = gps.hdop.hdop();
-    String time = String(millis());
+    const char* mac = macStr.c_str();
+    const char* ssid = ssidStr.c_str();
 
-    logToCSV(mac, ssid, lat, lon, accuracy, time, 0, "N/A", rssi, "BLE");
+    GPSData gpsData = getGPSData();
+    logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
 
     deviceList[deviceIndex].type = "BLE";
     deviceList[deviceIndex].ssid = ssid;
     deviceList[deviceIndex].mac = mac;
     deviceList[deviceIndex].rssi = rssi;
-    deviceList[deviceIndex].info = "BLE: " + ssid + " (" + mac + ") RSSI: " + String(rssi) + " dBm";
+    deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
     deviceIndex++;
 
     displayDevices();
@@ -154,27 +177,32 @@ void loop() {
   if (!gps.location.isValid()) {
     Serial.println("Waiting for valid GPS data...");
   }
-
-  int n = WiFi.scanNetworks();
+  // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
+  int n = WiFi.scanNetworks(false,true,false,200); 
   if (n > 0) {
+    GPSData gpsData = getGPSData();
     for (int i = 0; i < n; ++i) {
-      String ssid = WiFi.SSID(i);
-      String bssid = WiFi.BSSIDstr(i);
+      String ssidStr = WiFi.SSID(i);
+      String bssidStr = WiFi.BSSIDstr(i);
       int rssi = WiFi.RSSI(i);
-      String encryption = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
+      String encryptionStr = getAuthType(WiFi.encryptionType(i));
       int channel = WiFi.channel(i);
-      double lat = gps.location.lat();
-      double lon = gps.location.lng();
-      double accuracy = gps.hdop.hdop();
-      String time = String(millis());
 
-      logToCSV(bssid, ssid, lat, lon, accuracy, time, channel, encryption, rssi, "WiFi");
+      const char* ssid = ssidStr.c_str();
+      const char* bssid = bssidStr.c_str();
+      const char* encryption = encryptionStr.c_str();
+
+      if (ssidStr == "") {
+        ssidStr = "HIDDEN";
+      }
+
+      logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
 
       deviceList[deviceIndex].type = "WiFi";
       deviceList[deviceIndex].ssid = ssid;
       deviceList[deviceIndex].mac = bssid;
       deviceList[deviceIndex].rssi = rssi;
-      deviceList[deviceIndex].info = "WiFi: " + ssid + " (" + bssid + ") RSSI: " + String(rssi) + " dBm";
+      deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
       deviceIndex++;
 
       displayDevices();
@@ -185,4 +213,29 @@ void loop() {
   pBLEScan->clearResults();
 
   delay(2000);
+}
+
+const char* getAuthType(uint8_t wifiAuth) {
+  switch (wifiAuth) {
+    case WIFI_AUTH_OPEN:
+      return "[OPEN]";
+    case WIFI_AUTH_WEP:
+      return "[WEP]";
+    case WIFI_AUTH_WPA_PSK:
+      return "[WPA_PSK]";
+    case WIFI_AUTH_WPA2_PSK:
+      return "[WPA2_PSK]";
+    case WIFI_AUTH_WPA_WPA2_PSK:
+      return "[WPA_WPA2_PSK]";
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+      return "[WPA2_ENTERPRISE]";
+    case WIFI_AUTH_WPA3_PSK:
+      return "[WPA3_PSK]";
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+      return "[WPA2_WPA3_PSK]";
+    case WIFI_AUTH_WAPI_PSK:
+      return "[WAPI_PSK]";
+    default:
+      return "[UNKNOWN]";
+  }
 }
