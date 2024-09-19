@@ -177,8 +177,8 @@ void loop() {
   if (!gps.location.isValid()) {
     Serial.println("Waiting for valid GPS data...");
   }
-
-  int n = WiFi.scanNetworks(false,true,false,110); // Scan hidden networks at 110ms per channel
+  // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
+  int n = WiFi.scanNetworks(false,true,false,200); 
   if (n > 0) {
     GPSData gpsData = getGPSData();
     for (int i = 0; i < n; ++i) {
