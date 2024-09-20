@@ -35,16 +35,17 @@ File logFile;
 String logFileName = "/WiFiScanLog.csv";
 
 struct Device {
-  String type;
-  String ssid;
-  String mac;
+  char type[10];
+  char ssid[35];
+  char mac[18];
   int rssi;
-  String info;
+  char info[100];
 };
 
 Device deviceList[150];
 int deviceIndex = 0;
 
+// Filesystem
 void writeCSVHeader() {
   if (logFile) {
     logFile.println("WigleWifi-1.4,appRelease=" + BUILD + ",model=M5Paper,release=" + VERSION + ",device=M5Paper,display=ePaper,board=ESP32,brand=M5");
@@ -75,6 +76,7 @@ void logToCSV(const char* netid, const char* ssid, const char* authType, const c
   }
 }
 
+// Display
 void displayDevices() {
   for (int i = 0; i < deviceIndex - 1; i++) {
     for (int j = i + 1; j < deviceIndex; j++) {
@@ -121,6 +123,33 @@ GPSData getGPSData() {
   return gpsData;
 }
 
+void replaceLowestRSSIDevice(const char* type, const char* ssid, const char* mac, int rssi, int channel = 0, const char* encryption = "") {
+  if (deviceIndex == 0) return;  // Handle empty list case
+
+  int minIndex = 0;
+  for (int i = 1; i < deviceIndex; ++i) {
+    if (deviceList[i].rssi < deviceList[minIndex].rssi) {
+      minIndex = i;
+    }
+  }
+
+  auto safeStrCopy = [](char* dest, const char* src, size_t destSize) {  // safer string helper
+    strncpy(dest, src, destSize - 1);
+    dest[destSize - 1] = '\0';
+  };
+
+  safeStrCopy(deviceList[minIndex].type, type, sizeof(deviceList[minIndex].type));
+  safeStrCopy(deviceList[minIndex].ssid, ssid, sizeof(deviceList[minIndex].ssid));
+  safeStrCopy(deviceList[minIndex].mac, mac, sizeof(deviceList[minIndex].mac));
+  deviceList[minIndex].rssi = rssi;
+
+  // Format for device type
+  snprintf(deviceList[minIndex].info, sizeof(deviceList[minIndex].info),
+           strcmp(type, "WiFi") == 0 ? "WiFi: %s [%d] (%s) %d dBm" : "BLE: %s (%s) %d dBm",
+           ssid, channel, strcmp(type, "WiFi") == 0 ? encryption : mac, rssi);
+}
+
+// WiFi and BT scanning
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
     String macStr = advertisedDevice.getAddress().toString().c_str();
@@ -136,14 +165,18 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     GPSData gpsData = getGPSData();
     logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
 
-    deviceList[deviceIndex].type = "BLE";
-    deviceList[deviceIndex].ssid = ssid;
-    deviceList[deviceIndex].mac = mac;
-    deviceList[deviceIndex].rssi = rssi;
-    deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
-    deviceIndex++;
-    mNumBLE ++;
-
+    if (deviceIndex < 150) {
+      strncpy(deviceList[deviceIndex].type, "BLE", sizeof(deviceList[deviceIndex].type));
+      strncpy(deviceList[deviceIndex].ssid, ssid, sizeof(deviceList[deviceIndex].ssid) - 1);
+      strncpy(deviceList[deviceIndex].mac, mac, sizeof(deviceList[deviceIndex].mac) - 1);
+      deviceList[deviceIndex].rssi = rssi;
+      snprintf(deviceList[deviceIndex].info, sizeof(deviceList[deviceIndex].info),
+               "BLE: %s (%s) %d dBm", ssid, mac, rssi);
+      deviceIndex++;
+    } else {
+      replaceLowestRSSIDevice("BLE", ssid, mac, rssi);
+    }
+    mNumBLE++;
     displayDevices();
   }
 };
@@ -189,8 +222,8 @@ void loop() {
   if (!gps.location.isValid()) {
     Serial.println("Waiting for valid GPS data...");
   }
-  // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
-  int n = WiFi.scanNetworks(false,true,false,200);
+
+  int n = WiFi.scanNetworks(false, true, false, 200);
   if (n > 0) {
     GPSData gpsData = getGPSData();
     for (int i = 0; i < n; ++i) {
@@ -207,35 +240,42 @@ void loop() {
       if (ssidStr == "") {
         ssidStr = "HIDDEN";
       }
-
-      if (isDuplicate(bssid)) { // skip to the next
+      
+      if (isDuplicate(bssid)) {
         continue;
       }
 
       logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
 
-      deviceList[deviceIndex].type = "WiFi";
-      deviceList[deviceIndex].ssid = ssid;
-      deviceList[deviceIndex].mac = bssid;
-      deviceList[deviceIndex].rssi = rssi;
-      deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
-      deviceIndex++;
-      mNumWifi ++;
+      if (deviceIndex < 150) {
+        // Add WiFi device if there is space
+        strncpy(deviceList[deviceIndex].type, "WiFi", sizeof(deviceList[deviceIndex].type));
+        strncpy(deviceList[deviceIndex].ssid, ssid, sizeof(deviceList[deviceIndex].ssid) - 1);
+        strncpy(deviceList[deviceIndex].mac, bssid, sizeof(deviceList[deviceIndex].mac) - 1);
+        deviceList[deviceIndex].rssi = rssi;
+        snprintf(deviceList[deviceIndex].info, sizeof(deviceList[deviceIndex].info),
+                 "WiFi: %s [%d] (%s) %d dBm", ssid, channel, encryption, rssi);
 
+        deviceIndex++;
+      } else {
+        replaceLowestRSSIDevice("WiFi", ssid, bssid, rssi, channel, encryption);
+      }
+      mNumWifi++;
       displayDevices();
     }
   }
+
   WiFi.scanDelete();  // flush scan
 
   pBLEScan->start(scanTime, false);
   pBLEScan->clearResults();
 
-  delay(2000);
+  delay(2000);  // scan delay
 }
 
 bool isDuplicate(const char* mac) {
   for (int i = 0; i < deviceIndex; i++) {
-    if (deviceList[i].mac == String(mac)) {
+    if (strcmp(deviceList[i].mac, mac) == 0) {
       return true;
     }
   }
