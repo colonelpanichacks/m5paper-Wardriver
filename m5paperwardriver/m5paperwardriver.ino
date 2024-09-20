@@ -225,6 +225,7 @@ void loop() {
       displayDevices();
     }
   }
+  WiFi.scanDelete();
 
   pBLEScan->start(scanTime, false);
   pBLEScan->clearResults();
