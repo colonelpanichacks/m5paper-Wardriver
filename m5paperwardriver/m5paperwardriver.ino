@@ -94,19 +94,21 @@ void displayDevices() {
   canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
   canvas.drawLine(10, 30, 540, 30, 15);
 
-  int y = 40;
+  int y = 15;
   for (int i = 0; i < deviceIndex; i++) {
-    canvas.drawString(String(i + 1) + ": " + deviceList[i].info, 10, y);
     y += 30;
     if (y > canvas.height() - 20) {
       canvas.pushCanvas(0, 0, UPDATE_MODE_DU4);
       delay(2000);
       canvas.fillCanvas(0);
-      y = 40;
+      canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+      canvas.drawLine(10, 30, 540, 30, 15);
+      y = 45;
     }
+    canvas.drawString(String(i + 1) + ": " + deviceList[i].info, 10, y);
   }
 
-  canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 }
 
 GPSData getGPSData() {
@@ -143,8 +145,6 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
     deviceIndex++;
     mNumBLE ++;
-
-    displayDevices();
   }
 };
 
@@ -167,16 +167,24 @@ void setup() {
   canvas.createCanvas(540, 960);  // Correct full vertical canvas size
   canvas.setTextSize(2);
 
+  delay(2000);
   if (!initSDCard()) {
     Serial.println("Failed to initialize SD card. Halting...");
+    canvas.drawString("Failed to initialize SD card. Halting...", 10, 40);
+    canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
     while (true) delay(1000);
   }
+  canvas.drawString("SD card initialized...", 10, 40);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
+  delay(1000);
 
   GPS_Serial.begin(9600, SERIAL_8N1, 19, 18);
-  canvas.drawString("GPS initialized.", 10, 40);
-  canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-  delay(2000);
+  canvas.drawString("GPS initialized...", 10, 70);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
+  delay(1000);
 
+  canvas.drawString("Scanning initialized...", 10, 100);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
   initializeScanning();
 }
 
@@ -221,14 +229,14 @@ void loop() {
       deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
       deviceIndex++;
       mNumWifi ++;
-
-      displayDevices();
     }
   }
   WiFi.scanDelete();
 
   pBLEScan->start(scanTime, false);
   pBLEScan->clearResults();
+
+  displayDevices();
 
   delay(2000);
 }
