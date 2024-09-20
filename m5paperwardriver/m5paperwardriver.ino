@@ -98,7 +98,7 @@ void displayDevices() {
   for (int i = 0; i < deviceIndex; i++) {
     y += 30;
     if (y > canvas.height() - 20) {
-      canvas.pushCanvas(0, 0, UPDATE_MODE_DU4);
+      canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
       delay(2000);
       canvas.fillCanvas(0);
       canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
