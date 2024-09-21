@@ -42,7 +42,7 @@ struct Device {
   String info;
 };
 
-Device deviceList[150];
+Device deviceList[750];
 int deviceIndex = 0;
 
 void writeCSVHeader() {
@@ -92,6 +92,8 @@ void displayDevices() {
   canvas.fillCanvas(0);
   canvas.setTextSize(2);
   canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  // Memory debugging header
+  // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
   canvas.drawLine(10, 30, 540, 30, 15);
 
   int y = 15;
@@ -99,9 +101,11 @@ void displayDevices() {
     y += 30;
     if (y > canvas.height() - 20) {
       canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
-      delay(2000);
+      delay(3000);
       canvas.fillCanvas(0);
       canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+      // Memory debugging header
+      // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
       canvas.drawLine(10, 30, 540, 30, 15);
       y = 45;
     }
@@ -123,6 +127,40 @@ GPSData getGPSData() {
   return gpsData;
 }
 
+int isDuplicate(const char* mac) {
+  for (int i = 0; i < deviceIndex; i++) {
+    if (deviceList[i].mac == String(mac)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+const char* getAuthType(uint8_t wifiAuth) {
+  switch (wifiAuth) {
+    case WIFI_AUTH_OPEN:
+      return "[OPEN]";
+    case WIFI_AUTH_WEP:
+      return "[WEP]";
+    case WIFI_AUTH_WPA_PSK:
+      return "[WPA_PSK]";
+    case WIFI_AUTH_WPA2_PSK:
+      return "[WPA2_PSK]";
+    case WIFI_AUTH_WPA_WPA2_PSK:
+      return "[WPA_WPA2_PSK]";
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+      return "[WPA2_ENTERPRISE]";
+    case WIFI_AUTH_WPA3_PSK:
+      return "[WPA3_PSK]";
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+      return "[WPA2_WPA3_PSK]";
+    case WIFI_AUTH_WAPI_PSK:
+      return "[WAPI_PSK]";
+    default:
+      return "[UNKNOWN]";
+  }
+}
+
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
     String macStr = advertisedDevice.getAddress().toString().c_str();
@@ -131,20 +169,25 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     const char* mac = macStr.c_str();
     const char* ssid = ssidStr.c_str();
 
-    if (isDuplicate(mac)) {
-      return;
-    }
-
     GPSData gpsData = getGPSData();
     logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
 
-    deviceList[deviceIndex].type = "BLE";
-    deviceList[deviceIndex].ssid = ssid;
-    deviceList[deviceIndex].mac = mac;
-    deviceList[deviceIndex].rssi = rssi;
-    deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
-    deviceIndex++;
-    mNumBLE ++;
+    int existingIndex = isDuplicate(mac);
+    if (existingIndex != -1) {
+      deviceList[existingIndex].type = "BLE";
+      deviceList[existingIndex].ssid = ssid;
+      deviceList[existingIndex].mac = mac;
+      deviceList[existingIndex].rssi = rssi;
+      deviceList[existingIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
+    } else {
+      deviceList[deviceIndex].type = "BLE";
+      deviceList[deviceIndex].ssid = ssid;
+      deviceList[deviceIndex].mac = mac;
+      deviceList[deviceIndex].rssi = rssi;
+      deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
+      deviceIndex++;
+      mNumBLE ++;
+    }
   }
 };
 
@@ -167,23 +210,22 @@ void setup() {
   canvas.createCanvas(540, 960);  // Correct full vertical canvas size
   canvas.setTextSize(2);
 
-  delay(2000);
   if (!initSDCard()) {
-    Serial.println("Failed to initialize SD card. Halting...");
-    canvas.drawString("Failed to initialize SD card. Halting...", 10, 40);
+    Serial.println("Failed to initialize SD card. Halted");
+    canvas.drawString("Failed to initialize SD card. Halted.", 10, 40);
     canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
     while (true) delay(1000);
   }
-  canvas.drawString("SD card initialized...", 10, 40);
+  canvas.drawString("SD card initialized. OK", 10, 40);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
-  delay(1000);
 
   GPS_Serial.begin(9600, SERIAL_8N1, 19, 18);
-  canvas.drawString("GPS initialized...", 10, 70);
+  canvas.drawString("GPS initialized. OK", 10, 70);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
-  delay(1000);
 
-  canvas.drawString("Scanning initialized...", 10, 100);
+  canvas.drawString("Maximum tracked devices: " + String(sizeof(deviceList)/sizeof(deviceList[0])), 10, 100);
+
+  canvas.drawString("Initializing Scanning...", 10, 130);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
   initializeScanning();
 }
@@ -216,19 +258,24 @@ void loop() {
         ssidStr = "HIDDEN";
       }
 
-      if (isDuplicate(bssid)) { // skip to the next
-        continue;
-      }
-
       logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
 
-      deviceList[deviceIndex].type = "WiFi";
-      deviceList[deviceIndex].ssid = ssid;
-      deviceList[deviceIndex].mac = bssid;
-      deviceList[deviceIndex].rssi = rssi;
-      deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
-      deviceIndex++;
-      mNumWifi ++;
+      int existingIndex = isDuplicate(bssid);
+      if (existingIndex != -1) {
+        deviceList[existingIndex].type = "WiFi";
+        deviceList[existingIndex].ssid = ssid;
+        deviceList[existingIndex].mac = bssid;
+        deviceList[existingIndex].rssi = rssi;
+        deviceList[existingIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
+      } else {
+        deviceList[deviceIndex].type = "WiFi";
+        deviceList[deviceIndex].ssid = ssid;
+        deviceList[deviceIndex].mac = bssid;
+        deviceList[deviceIndex].rssi = rssi;
+        deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
+        deviceIndex++;
+        mNumWifi ++;
+      }
     }
   }
   WiFi.scanDelete();
@@ -237,40 +284,4 @@ void loop() {
   pBLEScan->clearResults();
 
   displayDevices();
-
-  delay(2000);
-}
-
-bool isDuplicate(const char* mac) {
-  for (int i = 0; i < deviceIndex; i++) {
-    if (deviceList[i].mac == String(mac)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const char* getAuthType(uint8_t wifiAuth) {
-  switch (wifiAuth) {
-    case WIFI_AUTH_OPEN:
-      return "[OPEN]";
-    case WIFI_AUTH_WEP:
-      return "[WEP]";
-    case WIFI_AUTH_WPA_PSK:
-      return "[WPA_PSK]";
-    case WIFI_AUTH_WPA2_PSK:
-      return "[WPA2_PSK]";
-    case WIFI_AUTH_WPA_WPA2_PSK:
-      return "[WPA_WPA2_PSK]";
-    case WIFI_AUTH_WPA2_ENTERPRISE:
-      return "[WPA2_ENTERPRISE]";
-    case WIFI_AUTH_WPA3_PSK:
-      return "[WPA3_PSK]";
-    case WIFI_AUTH_WPA2_WPA3_PSK:
-      return "[WPA2_WPA3_PSK]";
-    case WIFI_AUTH_WAPI_PSK:
-      return "[WAPI_PSK]";
-    default:
-      return "[UNKNOWN]";
-  }
 }
