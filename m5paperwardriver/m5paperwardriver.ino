@@ -7,9 +7,20 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include "esp_timer.h"
+#include "esp_sleep.h"
 
-const String BUILD = "1.0.1";
+const String BUILD = "1.0.2";
 const String VERSION = "1.0";
+
+// Set timeouts in seconds for users
+const int display_timeout_s = 120;
+const int device_timeout_s = 300;
+
+// Convert S to uS because ts is in uS
+const int S_TO_uS = 1000000;
+const int display_timeout = display_timeout_s * S_TO_uS;
+const int device_timeout = device_timeout_s * S_TO_uS;
 
 M5EPD_Canvas canvas(&M5.EPD);
 #define SD_CS_PIN 4
@@ -40,6 +51,7 @@ struct Device {
   String mac;
   int rssi;
   String info;
+  int64_t ts; //timestamp since boot in microseconds
 };
 
 Device deviceList[500];
@@ -76,12 +88,15 @@ void logToCSV(const char* netid, const char* ssid, const char* authType, const c
 }
 
 void displayDevices() {
+  int64_t now = esp_timer_get_time();
   for (int i = 0; i < deviceIndex - 1; i++) {
-    for (int j = i + 1; j < deviceIndex; j++) {
-      if (deviceList[i].rssi < deviceList[j].rssi) {
-        Device temp = deviceList[i];
-        deviceList[i] = deviceList[j];
-        deviceList[j] = temp;
+    if ((now - deviceList[i].ts) < display_timeout) {
+      for (int j = i + 1; j < deviceIndex; j++) {
+        if (deviceList[i].rssi < deviceList[j].rssi) {
+          Device temp = deviceList[i];
+          deviceList[i] = deviceList[j];
+          deviceList[j] = temp;
+        }
       }
     }
   }
@@ -179,12 +194,14 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       deviceList[existingIndex].mac = mac;
       deviceList[existingIndex].rssi = rssi;
       deviceList[existingIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
+      deviceList[existingIndex].ts = esp_timer_get_time();
     } else {
       deviceList[deviceIndex].type = "BLE";
       deviceList[deviceIndex].ssid = ssid;
       deviceList[deviceIndex].mac = mac;
       deviceList[deviceIndex].rssi = rssi;
       deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
+      deviceList[deviceIndex].ts = esp_timer_get_time();
       deviceIndex++;
       if (deviceIndex > (sizeof(deviceList)/sizeof(deviceList[0]))) {
         deviceIndex = 0;
@@ -230,8 +247,10 @@ void setup() {
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 
   canvas.drawString("Maximum tracked devices: " + String(sizeof(deviceList)/sizeof(deviceList[0])), 10, 100);
+  canvas.drawString("Display timeout        : " + String(display_timeout_s), 10, 130);
+  canvas.drawString("Device timeout        : " + String(device_timeout_s), 10, 160);
 
-  canvas.drawString("Initializing Scanning...", 10, 130);
+  canvas.drawString("Initializing Scanning...", 10, 190);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
   initializeScanning();
 }
@@ -273,12 +292,14 @@ void loop() {
         deviceList[existingIndex].mac = bssid;
         deviceList[existingIndex].rssi = rssi;
         deviceList[existingIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
+        deviceList[existingIndex].ts = esp_timer_get_time();
       } else {
         deviceList[deviceIndex].type = "WiFi";
         deviceList[deviceIndex].ssid = ssid;
         deviceList[deviceIndex].mac = bssid;
         deviceList[deviceIndex].rssi = rssi;
         deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
+        deviceList[deviceIndex].ts = esp_timer_get_time();
         deviceIndex++;
         if (deviceIndex > (sizeof(deviceList)/sizeof(deviceList[0]))) {
           deviceIndex = 0;
