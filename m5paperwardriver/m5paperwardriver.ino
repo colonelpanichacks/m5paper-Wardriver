@@ -42,7 +42,7 @@ struct Device {
   String info;
 };
 
-Device deviceList[750];
+Device deviceList[500];
 int deviceIndex = 0;
 
 void writeCSVHeader() {
@@ -186,7 +186,13 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       deviceList[deviceIndex].rssi = rssi;
       deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
       deviceIndex++;
-      mNumBLE ++;
+      if (deviceIndex > (sizeof(deviceList)/sizeof(deviceList[0]))) {
+        deviceIndex = 0;
+        mNumWifi = 0;
+        mNumBLE = 0;
+      } else {
+        mNumBLE ++;
+      }
     }
   }
 };
@@ -274,7 +280,13 @@ void loop() {
         deviceList[deviceIndex].rssi = rssi;
         deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
         deviceIndex++;
-        mNumWifi ++;
+        if (deviceIndex > (sizeof(deviceList)/sizeof(deviceList[0]))) {
+          deviceIndex = 0;
+          mNumWifi = 0;
+          mNumBLE = 0;
+        } else {
+          mNumWifi ++;
+        }
       }
     }
   }
@@ -283,5 +295,5 @@ void loop() {
   pBLEScan->start(scanTime, false);
   pBLEScan->clearResults();
 
-  displayDevices();
+  displayDevices(); // the wifi scan takes time so no need to delay here
 }
