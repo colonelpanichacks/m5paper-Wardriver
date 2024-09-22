@@ -93,7 +93,7 @@ void drawHeader(int mNumWifi, int mNumBLE) {
   canvas.fillCanvas(0);
   String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
   // Normal Info header
-  // canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Memory debugging Info header
   // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
@@ -110,7 +110,7 @@ void drawHeader(int mNumWifi, int mNumBLE) {
     battVolt = BATT_MAX;
   }
   // Calculate percentage
-  float batteryPercent = ((float)(battVolt - BATT_MIN) / (float)BATT_DIFF ) * 100;
+  float batteryPercent = ((float)(battVolt - BATT_MIN) / (float)BATT_DIFF );
   // slowing pulling line in from both sides toward the middle as it drains
   int halfLineSize = (float)270 * batteryPercent;
   // Left half of line
