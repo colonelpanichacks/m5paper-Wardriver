@@ -15,12 +15,16 @@ const String VERSION = "1.0";
 
 // Set timeouts in seconds for users
 const int display_timeout_s = 120;
-const int device_timeout_s = 300;
+const int clean_every_s = 60;
 
 // Convert S to uS because ts is in uS
 const int S_TO_uS = 1000000;
 const int display_timeout = display_timeout_s * S_TO_uS;
-const int device_timeout = device_timeout_s * S_TO_uS;
+
+// Battery constants
+const int BATT_MAX = 4350;
+const int BATT_MIN = 3300;
+const int BATT_DIFF = BATT_MAX - BATT_MIN;
 
 M5EPD_Canvas canvas(&M5.EPD);
 #define SD_CS_PIN 4
@@ -39,9 +43,6 @@ struct GPSData {
 BLEScan* pBLEScan;
 int scanTime = 5;
 
-int mNumWifi = 0;
-int mNumBLE = 0;
-
 File logFile;
 String logFileName = "/WiFiScanLog.csv";
 
@@ -51,11 +52,12 @@ struct Device {
   String mac;
   int rssi;
   String info;
-  int64_t ts; //timestamp since boot in microseconds
+  int64_t ts = esp_timer_get_time() - display_timeout - 1; //timestamp since boot in microseconds, initialized to be outside the display timeout
 };
 
-Device deviceList[500];
-int deviceIndex = 0;
+const int max_devices = 825;
+int64_t init_timeout = esp_timer_get_time() - display_timeout;
+Device deviceList[max_devices];
 
 void writeCSVHeader() {
   if (logFile) {
@@ -87,46 +89,80 @@ void logToCSV(const char* netid, const char* ssid, const char* authType, const c
   }
 }
 
+void drawHeader(int mNumWifi, int mNumBLE) {
+  canvas.fillCanvas(0);
+  String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
+  // Normal Info header
+  // canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+
+  // Memory debugging Info header
+  // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+
+  // Normal line
+  // canvas.drawLine(10, 30, 540, 30, 15);
+
+  // Battery level indicator line
+  uint32_t battVolt = M5.getBatteryVoltage();
+  // Normalize battery voltage
+  if (battVolt < BATT_MIN) {
+    battVolt = BATT_MIN;
+  } else if (battVolt > BATT_MAX) {
+    battVolt = BATT_MAX;
+  }
+  // Calculate percentage
+  float batteryPercent = ((float)(battVolt - BATT_MIN) / (float)BATT_DIFF ) * 100;
+  // slowing pulling line in from both sides toward the middle as it drains
+  int halfLineSize = (float)270 * batteryPercent;
+  // Left half of line
+  canvas.drawLine(270 - halfLineSize, 30, 270, 30, 15);
+  // Right half of line
+  canvas.drawLine(270, 30, 270 + halfLineSize, 30, 15);
+}
+
 void displayDevices() {
+  int mNumWifi = 0;
+  int mNumBLE = 0;
   int64_t now = esp_timer_get_time();
-  for (int i = 0; i < deviceIndex - 1; i++) {
+
+  for (int i = 0; i < max_devices; i++) {
     if ((now - deviceList[i].ts) < display_timeout) {
-      for (int j = i + 1; j < deviceIndex; j++) {
-        if (deviceList[i].rssi < deviceList[j].rssi) {
-          Device temp = deviceList[i];
-          deviceList[i] = deviceList[j];
-          deviceList[j] = temp;
+      for (int j = i + 1; j < max_devices - 1; j++) {
+        if ((now - deviceList[j].ts) < display_timeout) {
+          if (deviceList[i].rssi < deviceList[j].rssi) {
+            Device temp = deviceList[i];
+            deviceList[i] = deviceList[j];
+            deviceList[j] = temp;
+          }
         }
       }
     }
+    if (deviceList[i].type == "WiFi") {
+      mNumWifi ++;
+    }
+    if (deviceList[i].type == "BLE") {
+      mNumBLE ++;
+    }
   }
-
-  String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
 
   canvas.createCanvas(540, 960);
-  canvas.fillCanvas(0);
   canvas.setTextSize(2);
-  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
-  // Memory debugging header
-  // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
-  canvas.drawLine(10, 30, 540, 30, 15);
+  drawHeader(mNumWifi, mNumBLE);
 
   int y = 15;
-  for (int i = 0; i < deviceIndex; i++) {
-    y += 30;
-    if (y > canvas.height() - 20) {
-      canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
-      delay(3000);
-      canvas.fillCanvas(0);
-      canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
-      // Memory debugging header
-      // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
-      canvas.drawLine(10, 30, 540, 30, 15);
-      y = 45;
+  int dCount = 0;
+  for (int i = 0; i < max_devices; i++) {
+    if ((now - deviceList[i].ts) < display_timeout) {
+      y += 30;
+      dCount ++;
+      if (y > canvas.height() - 20) {
+        canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
+        delay(3000);
+        drawHeader(mNumWifi, mNumBLE);
+        y = 45;
+      }
+      canvas.drawString(String(dCount) + ": " + deviceList[i].info, 10, y);
     }
-    canvas.drawString(String(i + 1) + ": " + deviceList[i].info, 10, y);
   }
-
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 }
 
@@ -142,13 +178,21 @@ GPSData getGPSData() {
   return gpsData;
 }
 
-int isDuplicate(const char* mac) {
-  for (int i = 0; i < deviceIndex; i++) {
+int magicIndex(const char* mac) {
+  for (int i = 0; i < max_devices; i++) {
     if (deviceList[i].mac == String(mac)) {
       return i;
     }
   }
-  return -1;
+  int64_t ts_to_beat = esp_timer_get_time();
+  int oldest_index = 0;
+  for (int i = max_devices; i >= 0; i--) {
+    if (deviceList[i].ts < ts_to_beat) {
+      ts_to_beat = deviceList[i].ts;
+      oldest_index = i;
+    }
+  }
+  return oldest_index;
 }
 
 const char* getAuthType(uint8_t wifiAuth) {
@@ -187,30 +231,13 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     GPSData gpsData = getGPSData();
     logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
 
-    int existingIndex = isDuplicate(mac);
-    if (existingIndex != -1) {
-      deviceList[existingIndex].type = "BLE";
-      deviceList[existingIndex].ssid = ssid;
-      deviceList[existingIndex].mac = mac;
-      deviceList[existingIndex].rssi = rssi;
-      deviceList[existingIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
-      deviceList[existingIndex].ts = esp_timer_get_time();
-    } else {
-      deviceList[deviceIndex].type = "BLE";
-      deviceList[deviceIndex].ssid = ssid;
-      deviceList[deviceIndex].mac = mac;
-      deviceList[deviceIndex].rssi = rssi;
-      deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi) + " dBm";
-      deviceList[deviceIndex].ts = esp_timer_get_time();
-      deviceIndex++;
-      if (deviceIndex > (sizeof(deviceList)/sizeof(deviceList[0]))) {
-        deviceIndex = 0;
-        mNumWifi = 0;
-        mNumBLE = 0;
-      } else {
-        mNumBLE ++;
-      }
-    }
+    int deviceIndex = magicIndex(mac);
+    deviceList[deviceIndex].type = "BLE";
+    deviceList[deviceIndex].ssid = ssid;
+    deviceList[deviceIndex].mac = mac;
+    deviceList[deviceIndex].rssi = rssi;
+    deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi);
+    deviceList[deviceIndex].ts = esp_timer_get_time();
   }
 };
 
@@ -223,15 +250,20 @@ void initializeScanning() {
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
+  Serial.println("Scanning Initialized. OK");
+  canvas.drawString("Scanning Initialized. OK", 10, 190);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 }
 
 void setup() {
   Serial.begin(115200);
   M5.begin();
+  Serial.println("M5paper initialized.");
   M5.EPD.SetRotation(1);  // Correct rotation for full vertical (portrait) display
   M5.EPD.Clear(true);
   canvas.createCanvas(540, 960);  // Correct full vertical canvas size
   canvas.setTextSize(2);
+  Serial.println("M5paper screen initialized.");
 
   if (!initSDCard()) {
     Serial.println("Failed to initialize SD card. Halted");
@@ -239,18 +271,20 @@ void setup() {
     canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
     while (true) delay(1000);
   }
+  Serial.println("SD card initialized. OK");
   canvas.drawString("SD card initialized. OK", 10, 40);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 
   GPS_Serial.begin(9600, SERIAL_8N1, 19, 18);
+  Serial.println("GPS initialized. OK");
   canvas.drawString("GPS initialized. OK", 10, 70);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 
-  canvas.drawString("Maximum tracked devices: " + String(sizeof(deviceList)/sizeof(deviceList[0])), 10, 100);
+  canvas.drawString("Maximum tracked devices: " + String(max_devices), 10, 100);
   canvas.drawString("Display timeout        : " + String(display_timeout_s), 10, 130);
-  canvas.drawString("Device timeout        : " + String(device_timeout_s), 10, 160);
 
-  canvas.drawString("Initializing Scanning...", 10, 190);
+  Serial.println("Initializing Scanning...");
+  canvas.drawString("Initializing Scanning...", 10, 160);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
   initializeScanning();
 }
@@ -279,36 +313,15 @@ void loop() {
       const char* bssid = bssidStr.c_str();
       const char* encryption = encryptionStr.c_str();
 
-      if (ssidStr == "") {
-        ssidStr = "HIDDEN";
-      }
-
       logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
 
-      int existingIndex = isDuplicate(bssid);
-      if (existingIndex != -1) {
-        deviceList[existingIndex].type = "WiFi";
-        deviceList[existingIndex].ssid = ssid;
-        deviceList[existingIndex].mac = bssid;
-        deviceList[existingIndex].rssi = rssi;
-        deviceList[existingIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
-        deviceList[existingIndex].ts = esp_timer_get_time();
-      } else {
-        deviceList[deviceIndex].type = "WiFi";
-        deviceList[deviceIndex].ssid = ssid;
-        deviceList[deviceIndex].mac = bssid;
-        deviceList[deviceIndex].rssi = rssi;
-        deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi) + " dBm";
-        deviceList[deviceIndex].ts = esp_timer_get_time();
-        deviceIndex++;
-        if (deviceIndex > (sizeof(deviceList)/sizeof(deviceList[0]))) {
-          deviceIndex = 0;
-          mNumWifi = 0;
-          mNumBLE = 0;
-        } else {
-          mNumWifi ++;
-        }
-      }
+      int deviceIndex = magicIndex(bssid);
+      deviceList[deviceIndex].type = "WiFi";
+      deviceList[deviceIndex].ssid = ssid;
+      deviceList[deviceIndex].mac = bssid;
+      deviceList[deviceIndex].rssi = rssi;
+      deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi);
+      deviceList[deviceIndex].ts = esp_timer_get_time();
     }
   }
   WiFi.scanDelete();
