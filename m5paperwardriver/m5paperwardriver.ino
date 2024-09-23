@@ -59,11 +59,10 @@ struct Device {
   String ssid;
   String mac;
   int rssi;
-  String info;
   int64_t ts = esp_timer_get_time() - display_timeout - 1; //timestamp since boot in microseconds, initialized to be outside the display timeout
 };
 
-const int max_devices = 825;
+const int max_devices = 1025;
 int64_t init_timeout = esp_timer_get_time() - display_timeout;
 Device deviceList[max_devices];
 std::mutex deviceListMutex;
@@ -209,12 +208,18 @@ void displayDevices() {
         drawHeader(mNumWifi, mNumBLE);
         y = 45;
       }
-      canvas.drawString(String(dCount) + ": " + deviceList[i].info, 10, y);
+
+      canvas.drawString(String(dCount) + ": " +
+        deviceList[i].type + ": " +
+        deviceList[i].ssid +
+        " (" + deviceList[i].mac + ") " +
+        deviceList[i].rssi
+        , 10, y);
     }
   }
   deviceListMutex.unlock();
   mutexDebug("Mutex released by main device display loop");
-  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
 }
 
 GPSData getGPSData() {
@@ -297,7 +302,6 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       deviceList[deviceIndex].ssid = ssid;
       deviceList[deviceIndex].mac = mac;
       deviceList[deviceIndex].rssi = rssi;
-      deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi);
       deviceList[deviceIndex].ts = esp_timer_get_time();
     }
     mutexDebug("Mutex released by BT Callback");
@@ -391,7 +395,6 @@ void loop() {
         deviceList[deviceIndex].ssid = ssid;
         deviceList[deviceIndex].mac = bssid;
         deviceList[deviceIndex].rssi = rssi;
-        deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi);
         deviceList[deviceIndex].ts = esp_timer_get_time();
       }
       mutexDebug("Mutex released by wifi loop");
