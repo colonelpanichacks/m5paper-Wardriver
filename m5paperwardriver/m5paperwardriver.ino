@@ -9,9 +9,17 @@
 #include <BLEAdvertisedDevice.h>
 #include "esp_timer.h"
 #include "esp_sleep.h"
+#include <mutex>
 
 const String BUILD = "1.0.2";
 const String VERSION = "1.0";
+
+/* Slow debugging serial prints
+ *  Set 0 to disable and 1 to enable
+ */
+
+#define MUTEXDEBUG 0
+#define BATTDEBUG 0
 
 // Set timeouts in seconds for users
 const int display_timeout_s = 120;
@@ -22,8 +30,8 @@ const int S_TO_uS = 1000000;
 const int display_timeout = display_timeout_s * S_TO_uS;
 
 // Battery constants
-const int BATT_MAX = 4350;
-const int BATT_MIN = 3300;
+const int BATT_MAX = 4200; // it says 4350 on the back but I haven't seen it that high while unplugged
+const int BATT_MIN = 3200; // mine died at 3010 and we want a buffer
 const int BATT_DIFF = BATT_MAX - BATT_MIN;
 
 M5EPD_Canvas canvas(&M5.EPD);
@@ -58,6 +66,20 @@ struct Device {
 const int max_devices = 825;
 int64_t init_timeout = esp_timer_get_time() - display_timeout;
 Device deviceList[max_devices];
+std::mutex deviceListMutex;
+
+void mutexDebug(String msg="") {
+  #if MUTEXDEBUG == 1
+  Serial.println(msg);
+  #endif
+}
+
+void battDebug(String msg="", float var=0) {
+  #if BATTDEBUG == 1
+  Serial.print(msg);
+  Serial.println(var);
+  #endif
+}
 
 void writeCSVHeader() {
   if (logFile) {
@@ -89,28 +111,40 @@ void logToCSV(const char* netid, const char* ssid, const char* authType, const c
   }
 }
 
-void drawHeader(int mNumWifi, int mNumBLE) {
-  canvas.fillCanvas(0);
-  String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
-  // Normal Info header
-  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
-
-  // Memory debugging Info header
-  // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
-
-  // Normal line
-  // canvas.drawLine(10, 30, 540, 30, 15);
-
-  // Battery level indicator line
+float getBatteryPercent() {
   uint32_t battVolt = M5.getBatteryVoltage();
+  battDebug("Raw battvolt: ", battVolt);
   // Normalize battery voltage
   if (battVolt < BATT_MIN) {
     battVolt = BATT_MIN;
   } else if (battVolt > BATT_MAX) {
     battVolt = BATT_MAX;
   }
+  battDebug("Normalized battVolt: ", battVolt);
   // Calculate percentage
   float batteryPercent = ((float)(battVolt - BATT_MIN) / (float)BATT_DIFF );
+  battDebug("battery percent: ", batteryPercent);
+  return batteryPercent;
+}
+
+void drawHeader(int mNumWifi, int mNumBLE) {
+  canvas.fillCanvas(0);
+
+  // Normal Info header
+  String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
+  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+
+  // Memory debugging Info header
+  // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+
+  // Battery debugging Info header
+  // canvas.drawString("BATT " + String(M5.getBatteryVoltage()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+
+  // Normal line
+  // canvas.drawLine(10, 30, 540, 30, 15);
+
+  // Battery level indicator line
+  float batteryPercent = getBatteryPercent();
   // slowing pulling line in from both sides toward the middle as it drains
   int halfLineSize = (float)270 * batteryPercent;
   // Left half of line
@@ -124,7 +158,10 @@ void displayDevices() {
   int mNumBLE = 0;
   int64_t now = esp_timer_get_time();
 
+  // todo: don't bubble sort
+  mutexDebug("Mutex held by dD sort");
   for (int i = 0; i < max_devices; i++) {
+    std::lock_guard<std::mutex> lck(deviceListMutex);
     if ((now - deviceList[i].ts) < display_timeout) {
       for (int j = i + 1; j < max_devices - 1; j++) {
         if ((now - deviceList[j].ts) < display_timeout) {
@@ -143,26 +180,40 @@ void displayDevices() {
       mNumBLE ++;
     }
   }
+  mutexDebug("Mutex released by dD sort");
 
   canvas.createCanvas(540, 960);
   canvas.setTextSize(2);
   drawHeader(mNumWifi, mNumBLE);
 
+  /* Unlocking the mutex during the sleep can cause devices
+   *  to get updated and end up out of order.  It's better
+   *  than before the mutexs though...
+   */
+
   int y = 15;
   int dCount = 0;
+  deviceListMutex.lock();
+  mutexDebug("Mutex held by main device display loop");
   for (int i = 0; i < max_devices; i++) {
     if ((now - deviceList[i].ts) < display_timeout) {
       y += 30;
       dCount ++;
       if (y > canvas.height() - 20) {
         canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
+        deviceListMutex.unlock();
+        mutexDebug("Mutex released before sleep inside device display loop");
         delay(3000);
+        deviceListMutex.lock();
+        mutexDebug("Mutex reheld after sleep inside device displayloop");
         drawHeader(mNumWifi, mNumBLE);
         y = 45;
       }
       canvas.drawString(String(dCount) + ": " + deviceList[i].info, 10, y);
     }
   }
+  deviceListMutex.unlock();
+  mutexDebug("Mutex released by main device display loop");
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 }
 
@@ -179,19 +230,26 @@ GPSData getGPSData() {
 }
 
 int magicIndex(const char* mac) {
+  mutexDebug("Mutex held by mI mac match");
   for (int i = 0; i < max_devices; i++) {
+    std::lock_guard<std::mutex> lck(deviceListMutex);
     if (deviceList[i].mac == String(mac)) {
+      mutexDebug("Mutex released by mI mac match success");
       return i;
     }
   }
+  mutexDebug("Mutex released by mI mac match failure");
   int64_t ts_to_beat = esp_timer_get_time();
   int oldest_index = 0;
+  mutexDebug("Mutex held by mI oldest match");
   for (int i = max_devices; i >= 0; i--) {
+    std::lock_guard<std::mutex> lck(deviceListMutex);
     if (deviceList[i].ts < ts_to_beat) {
       ts_to_beat = deviceList[i].ts;
       oldest_index = i;
     }
   }
+  mutexDebug("Mutex released by mI oldest match");
   return oldest_index;
 }
 
@@ -232,12 +290,17 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
 
     int deviceIndex = magicIndex(mac);
-    deviceList[deviceIndex].type = "BLE";
-    deviceList[deviceIndex].ssid = ssid;
-    deviceList[deviceIndex].mac = mac;
-    deviceList[deviceIndex].rssi = rssi;
-    deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi);
-    deviceList[deviceIndex].ts = esp_timer_get_time();
+    mutexDebug("Mutex held by BT Callback");
+    {
+      std::lock_guard<std::mutex> lck(deviceListMutex);
+      deviceList[deviceIndex].type = "BLE";
+      deviceList[deviceIndex].ssid = ssid;
+      deviceList[deviceIndex].mac = mac;
+      deviceList[deviceIndex].rssi = rssi;
+      deviceList[deviceIndex].info = "BLE: " + String(ssid) + " (" + String(mac) + ") RSSI: " + String(rssi);
+      deviceList[deviceIndex].ts = esp_timer_get_time();
+    }
+    mutexDebug("Mutex released by BT Callback");
   }
 };
 
@@ -258,12 +321,17 @@ void initializeScanning() {
 void setup() {
   Serial.begin(115200);
   M5.begin();
+  Serial.print("Current battery voltage: ");
+  Serial.println(String(M5.getBatteryVoltage() / (float)1000));
   Serial.println("M5paper initialized.");
   M5.EPD.SetRotation(1);  // Correct rotation for full vertical (portrait) display
   M5.EPD.Clear(true);
   canvas.createCanvas(540, 960);  // Correct full vertical canvas size
   canvas.setTextSize(2);
   Serial.println("M5paper screen initialized.");
+
+  canvas.drawString("Current battery " + String(int(getBatteryPercent() * 100)) + "% (" + String(M5.getBatteryVoltage() / (float)1000) + "v)", 10, 10);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 
   if (!initSDCard()) {
     Serial.println("Failed to initialize SD card. Halted");
@@ -316,12 +384,17 @@ void loop() {
       logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
 
       int deviceIndex = magicIndex(bssid);
-      deviceList[deviceIndex].type = "WiFi";
-      deviceList[deviceIndex].ssid = ssid;
-      deviceList[deviceIndex].mac = bssid;
-      deviceList[deviceIndex].rssi = rssi;
-      deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi);
-      deviceList[deviceIndex].ts = esp_timer_get_time();
+      mutexDebug("Mutex held by wifi loop");
+      {
+        std::lock_guard<std::mutex> lck(deviceListMutex);
+        deviceList[deviceIndex].type = "WiFi";
+        deviceList[deviceIndex].ssid = ssid;
+        deviceList[deviceIndex].mac = bssid;
+        deviceList[deviceIndex].rssi = rssi;
+        deviceList[deviceIndex].info = "WiFi: " + ssidStr + " (" + bssidStr + ") RSSI: " + String(rssi);
+        deviceList[deviceIndex].ts = esp_timer_get_time();
+      }
+      mutexDebug("Mutex released by wifi loop");
     }
   }
   WiFi.scanDelete();
