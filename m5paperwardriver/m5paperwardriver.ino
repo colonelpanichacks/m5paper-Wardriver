@@ -128,6 +128,7 @@ float getBatteryPercent() {
 
 void drawHeader(int mNumWifi, int mNumBLE) {
   canvas.fillCanvas(0);
+  // canvas.setTextSize(3);
 
   // Normal Info header
   String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
@@ -135,6 +136,9 @@ void drawHeader(int mNumWifi, int mNumBLE) {
 
   // Memory debugging Info header
   // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+
+  // Runtime Duration Info header
+  // canvas.drawString("Runtime: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Battery debugging Info header
   // canvas.drawString("BATT " + String(M5.getBatteryVoltage()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
@@ -150,6 +154,7 @@ void drawHeader(int mNumWifi, int mNumBLE) {
   canvas.drawLine(270 - halfLineSize, 30, 270, 30, 15);
   // Right half of line
   canvas.drawLine(270, 30, 270 + halfLineSize, 30, 15);
+  // canvas.setTextSize(2);
 }
 
 void displayDevices() {
@@ -258,6 +263,16 @@ int magicIndex(const char* mac) {
   return oldest_index;
 }
 
+/* Where did all this come from?
+ *
+ * ESP32 type codes
+ * https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/src/STA.cpp#L703
+ * https://github.com/espressif/esp-idf/blob/master/components/esp_wifi/include/esp_wifi_types_generic.h#L66
+ *
+ * Android Type codes
+ * https://developer.android.com/reference/android/net/wifi/WifiConfiguration.KeyMgmt ?
+ * https://android.googlesource.com/platform/prebuilts/fullsdk/sources/android-30/+/refs/heads/main/com/android/server/wifi/util/InformationElementUtil.java#1016 ??
+ */
 const char* getAuthType(uint8_t wifiAuth) {
   switch (wifiAuth) {
     case WIFI_AUTH_OPEN:
@@ -270,6 +285,8 @@ const char* getAuthType(uint8_t wifiAuth) {
       return "[WPA2_PSK]";
     case WIFI_AUTH_WPA_WPA2_PSK:
       return "[WPA_WPA2_PSK]";
+    case WIFI_AUTH_ENTERPRISE:
+      return "[WPA_ENTERPRISE]";
     case WIFI_AUTH_WPA2_ENTERPRISE:
       return "[WPA2_ENTERPRISE]";
     case WIFI_AUTH_WPA3_PSK:
@@ -278,6 +295,18 @@ const char* getAuthType(uint8_t wifiAuth) {
       return "[WPA2_WPA3_PSK]";
     case WIFI_AUTH_WAPI_PSK:
       return "[WAPI_PSK]";
+    case WIFI_AUTH_OWE:
+      return "[OWE]";
+    case WIFI_AUTH_WPA3_ENT_192:
+      return "[RSN-EAP_SUITE_B_192-GCMP-256]";
+    case WIFI_AUTH_WPA3_EXT_PSK:
+      return "[WPA3_PSK_DEPRECATED_EXT]";
+    case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE:
+      return "[WPA3_PSK_DEPRECATED_EXT]";
+    case WIFI_AUTH_DPP:
+      // DPP is an AUTH mechanism that works with both WPA2 and WPA3
+      // esp32 gives no indication of which, so I'm just calling it WPA2 since that's the lowest option
+      return "[WPA2_DPP]";
     default:
       return "[UNKNOWN]";
   }
@@ -313,6 +342,8 @@ void initializeScanning() {
   WiFi.disconnect();
   delay(100);
 
+  // TODO BLE5
+  // https://github.com/espressif/arduino-esp32/blob/master/libraries/BLE/examples/BLE5_extended_scan/BLE5_extended_scan.ino
   BLEDevice::init("");
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
@@ -370,6 +401,8 @@ void loop() {
   if (!gps.location.isValid()) {
     Serial.println("Waiting for valid GPS data...");
   }
+  // TODO Convert to async
+  // https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/examples/WiFiScanAsync/WiFiScanAsync.ino
   // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
   int n = WiFi.scanNetworks(false,true,false,200);
   if (n > 0) {
