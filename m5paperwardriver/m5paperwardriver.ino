@@ -266,10 +266,14 @@ int magicIndex(const char* mac) {
 /* Where did all this come from?
  *
  * ESP32 type codes
+ * apparently only these ones are supported
+ * https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/src/STA.cpp#L88
+ * despite having a bigger list here
  * https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/src/STA.cpp#L703
+ * and this is a different esp lib entirely which we aren't using?  Can we?
  * https://github.com/espressif/esp-idf/blob/master/components/esp_wifi/include/esp_wifi_types_generic.h#L66
  *
- * Android Type codes
+ * Android Type codes, what wigle csv wants
  * https://developer.android.com/reference/android/net/wifi/WifiConfiguration.KeyMgmt ?
  * https://android.googlesource.com/platform/prebuilts/fullsdk/sources/android-30/+/refs/heads/main/com/android/server/wifi/util/InformationElementUtil.java#1016 ??
  */
@@ -285,8 +289,8 @@ const char* getAuthType(uint8_t wifiAuth) {
       return "[WPA2_PSK]";
     case WIFI_AUTH_WPA_WPA2_PSK:
       return "[WPA_WPA2_PSK]";
-    case WIFI_AUTH_ENTERPRISE:
-      return "[WPA_ENTERPRISE]";
+    // case WIFI_AUTH_ENTERPRISE:
+    //  return "[WPA_ENTERPRISE]";
     case WIFI_AUTH_WPA2_ENTERPRISE:
       return "[WPA2_ENTERPRISE]";
     case WIFI_AUTH_WPA3_PSK:
@@ -295,18 +299,18 @@ const char* getAuthType(uint8_t wifiAuth) {
       return "[WPA2_WPA3_PSK]";
     case WIFI_AUTH_WAPI_PSK:
       return "[WAPI_PSK]";
-    case WIFI_AUTH_OWE:
-      return "[OWE]";
-    case WIFI_AUTH_WPA3_ENT_192:
-      return "[RSN-EAP_SUITE_B_192-GCMP-256]";
-    case WIFI_AUTH_WPA3_EXT_PSK:
-      return "[WPA3_PSK_DEPRECATED_EXT]";
-    case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE:
-      return "[WPA3_PSK_DEPRECATED_EXT]";
-    case WIFI_AUTH_DPP:
+    // case WIFI_AUTH_OWE:
+    //  return "[OWE]";
+    // case WIFI_AUTH_WPA3_ENT_192:
+    //  return "[RSN-EAP_SUITE_B_192-GCMP-256]";
+    // case WIFI_AUTH_WPA3_EXT_PSK:
+    //  return "[WPA3_PSK_DEPRECATED_EXT]";
+    // case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE:
+    //  return "[WPA3_PSK_DEPRECATED_EXT]";
+    // case WIFI_AUTH_DPP:
       // DPP is an AUTH mechanism that works with both WPA2 and WPA3
       // esp32 gives no indication of which, so I'm just calling it WPA2 since that's the lowest option
-      return "[WPA2_DPP]";
+    //  return "[WPA2_DPP]";
     default:
       return "[UNKNOWN]";
   }
@@ -401,9 +405,15 @@ void loop() {
   if (!gps.location.isValid()) {
     Serial.println("Waiting for valid GPS data...");
   }
+
+  // Set the minimum time per channel for active scanning.
+  // This doesn't work despite being in the example code?
+  // https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/examples/WiFiScanTime/WiFiScanTime.ino#L22
+  // WiFi.setScanActiveMinTime(103); // default minimum is 100ms
   // TODO Convert to async
   // https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/examples/WiFiScanAsync/WiFiScanAsync.ino
   // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
+  // async false, show_hidden true, passive false, max_ms_per_chan 200
   int n = WiFi.scanNetworks(false,true,false,200);
   if (n > 0) {
     GPSData gpsData = getGPSData();
