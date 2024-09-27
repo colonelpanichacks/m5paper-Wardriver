@@ -20,6 +20,7 @@ const String VERSION = "1.0";
 
 #define MUTEXDEBUG 0
 #define BATTDEBUG 0
+#define GPSDEBUG 0
 
 // Set timeouts in seconds for users
 const int display_timeout_s = 120;
@@ -75,6 +76,7 @@ void mutexDebug(String msg="") {
 
 void battDebug(String msg="", float var=0) {
   #if BATTDEBUG == 1
+  // Serial.printf("msg%d",var);
   Serial.print(msg);
   Serial.println(var);
   #endif
@@ -341,10 +343,26 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   }
 };
 
+
+void startWiFiScan() {
+  // Arduino-esp 3.x adds minimum time per channel for active scanning
+  // https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/examples/WiFiScanTime/WiFiScanTime.ino#L22
+  // But m5paper/m5epd only supports arduino-esp 2.x
+  // WiFi.setScanActiveMinTime(103); // default minimum is 100ms
+
+  // Scan + hidden networks, at default because interval instead of 2x since we scan async
+  // async true, show_hidden true, passive false, max_ms_per_chan
+  WiFi.scanNetworks(true,true,false,103);
+}
+
 void initializeScanning() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
+  startWiFiScan();
+  Serial.println("WiFi scanning Initialized. OK");
+  canvas.drawString("WiFi scanning Initialized. OK", 10, 190);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 
   // TODO BLE5
   // https://github.com/espressif/arduino-esp32/blob/master/libraries/BLE/examples/BLE5_extended_scan/BLE5_extended_scan.ino
@@ -352,13 +370,17 @@ void initializeScanning() {
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
-  Serial.println("Scanning Initialized. OK");
-  canvas.drawString("Scanning Initialized. OK", 10, 190);
+  Serial.println("BLE Scanning Initialized. OK");
+  canvas.drawString("BLE Scanning Initialized. OK", 10, 220);
+  canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
+
+  Serial.println("Waiting for devices...");
+  canvas.drawString("Waiting for devices...", 10, 280);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 }
 
 void setup() {
-  Serial.begin(115200);
+  //Serial.begin(115200); // part of M5.begin
   M5.begin();
   Serial.print("Current battery voltage: ");
   Serial.println(String(M5.getBatteryVoltage() / (float)1000));
@@ -396,28 +418,10 @@ void setup() {
   initializeScanning();
 }
 
-void loop() {
-  while (GPS_Serial.available() > 0) {
-    char c = GPS_Serial.read();
-    gps.encode(c);
-  }
-
-  if (!gps.location.isValid()) {
-    Serial.println("Waiting for valid GPS data...");
-  }
-
-  // Set the minimum time per channel for active scanning.
-  // This doesn't work despite being in the example code?
-  // https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/examples/WiFiScanTime/WiFiScanTime.ino#L22
-  // WiFi.setScanActiveMinTime(103); // default minimum is 100ms
-  // TODO Convert to async
-  // https://github.com/espressif/arduino-esp32/blob/master/libraries/WiFi/examples/WiFiScanAsync/WiFiScanAsync.ino
-  // Scan + hidden networks, at Nyquist sampling rate of 200ms per channel
-  // async false, show_hidden true, passive false, max_ms_per_chan 200
-  int n = WiFi.scanNetworks(false,true,false,200);
-  if (n > 0) {
+void parseWiFiScan(uint16_t networksFound) {
+  if (networksFound > 0) {
     GPSData gpsData = getGPSData();
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < networksFound; ++i) {
       String ssidStr = WiFi.SSID(i);
       String bssidStr = WiFi.BSSIDstr(i);
       int rssi = WiFi.RSSI(i);
@@ -444,9 +448,35 @@ void loop() {
     }
   }
   WiFi.scanDelete();
+}
+
+void loop() {
+  while (GPS_Serial.available() > 0) {
+    char c = GPS_Serial.read();
+    gps.encode(c);
+  }
+
+  #if GPSDEBUG == 1
+  if (!gps.location.isValid()) {
+    Serial.println("Waiting for valid GPS data...");
+  }
+  #endif
+
+  int16_t WiFiScanStatus = WiFi.scanComplete();
+  if (WiFiScanStatus < 0) {  // it is busy scanning or got an error
+    if (WiFiScanStatus == WIFI_SCAN_FAILED) {
+      Serial.println("WiFi Scan has failed. Starting again.");
+      startWiFiScan();
+    }
+    // other option is status WIFI_SCAN_RUNNING - just wait.
+  } else {  // Found Zero or more Wireless Networks
+    parseWiFiScan(WiFiScanStatus);
+    startWiFiScan();  // start over...
+  }
 
   pBLEScan->start(scanTime, false);
   pBLEScan->clearResults();
 
-  displayDevices(); // the wifi scan takes time so no need to delay here
+  displayDevices();
+  // displayDevices has the only delays in the main loop
 }
