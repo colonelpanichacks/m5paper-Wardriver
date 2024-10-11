@@ -35,6 +35,10 @@ const int BATT_MAX = 4200; // it says 4350 on the back but I haven't seen it tha
 const int BATT_MIN = 3200; // mine died at 3010 and we want a buffer
 const int BATT_DIFF = BATT_MAX - BATT_MIN;
 
+int xmax = 540;
+int ymax = 960;
+
+
 M5EPD_Canvas canvas(&M5.EPD);
 #define SD_CS_PIN 4
 
@@ -130,33 +134,70 @@ float getBatteryPercent() {
 
 void drawHeader(int mNumWifi, int mNumBLE) {
   canvas.fillCanvas(0);
-  // canvas.setTextSize(3);
+  canvas.setTextSize(3);
 
   // Normal Info header
   String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
-  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  //canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Memory debugging Info header
   // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Runtime Duration Info header
-  // canvas.drawString("Runtime: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  canvas.drawString("Time: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Battery debugging Info header
   // canvas.drawString("BATT " + String(M5.getBatteryVoltage()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Normal line
-  // canvas.drawLine(10, 30, 540, 30, 15);
+  // canvas.drawLine(0, 40, xmax, 40, 20);
 
   // Battery level indicator line
   float batteryPercent = getBatteryPercent();
   // slowing pulling line in from both sides toward the middle as it drains
-  int halfLineSize = (float)270 * batteryPercent;
+  int halfLineSize = (float)xmax/2 * batteryPercent;
   // Left half of line
-  canvas.drawLine(270 - halfLineSize, 30, 270, 30, 15);
+  canvas.drawLine(xmax/2 - halfLineSize, 40, xmax/2, 40, 15);
   // Right half of line
-  canvas.drawLine(270, 30, 270 + halfLineSize, 30, 15);
-  // canvas.setTextSize(2);
+  canvas.drawLine(xmax/2, 40, xmax/2 + halfLineSize, 40, 15);
+  canvas.setTextSize(2);
+}
+
+void setRotation(bool rotate = false) {
+  if (rotate) {
+    int temp = xmax;
+    xmax = ymax;
+    ymax = temp;
+    canvas.deleteCanvas();
+  }
+  if (xmax == 540) {
+    M5.EPD.SetRotation(90);  // Correct rotation for full vertical (portrait) display
+    M5.TP.SetRotation(90);
+  }
+  if (xmax == 960) {
+    M5.EPD.SetRotation(0);  // Correct rotation for full horizontal (landscape) display
+    M5.TP.SetRotation(0);
+  }
+  M5.EPD.Clear(true);
+  canvas.createCanvas(xmax, ymax);
+  canvas.setTextSize(2);
+}
+
+void checkButtons() {
+  if (M5.BtnL.wasPressed()) {
+    Serial.println("Btn L Pressed");
+    setRotation(true);
+  }
+  if (M5.BtnP.wasPressed()) {
+    Serial.println("Btn P Pressed");
+    setRotation(true);
+  }
+  if (M5.BtnR.wasPressed()) {
+    Serial.println("Btn R Pressed");
+    setRotation(true);
+  }
+  M5.BtnL.lastChange();
+  M5.update();
 }
 
 void displayDevices() {
@@ -188,7 +229,8 @@ void displayDevices() {
   }
   mutexDebug("Mutex released by dD sort");
 
-  canvas.createCanvas(540, 960);
+  checkButtons();
+  canvas.createCanvas(xmax, ymax);
   canvas.setTextSize(2);
   drawHeader(mNumWifi, mNumBLE);
 
@@ -197,7 +239,7 @@ void displayDevices() {
    *  than before the mutexs though...
    */
 
-  int y = 15;
+  int y = 25;
   int dCount = 0;
   deviceListMutex.lock();
   mutexDebug("Mutex held by main device display loop");
@@ -210,10 +252,11 @@ void displayDevices() {
         deviceListMutex.unlock();
         mutexDebug("Mutex released before sleep inside device display loop");
         delay(3000);
+        checkButtons();
         deviceListMutex.lock();
         mutexDebug("Mutex reheld after sleep inside device displayloop");
         drawHeader(mNumWifi, mNumBLE);
-        y = 45;
+        y = 55;
       }
 
       canvas.drawString(String(dCount) + ": " +
@@ -364,8 +407,10 @@ void initializeScanning() {
   canvas.drawString("WiFi scanning Initialized. OK", 10, 190);
   canvas.pushCanvas(0, 0, UPDATE_MODE_GLR16);
 
-  // TODO BLE5
-  // https://github.com/espressif/arduino-esp32/blob/master/libraries/BLE/examples/BLE5_extended_scan/BLE5_extended_scan.ino
+  // BT Classic Scanning
+  // Docs indicate support for Bluetooth v4.2 BR/EDR
+
+  // BLE 4.x scanning (5.x not supported by ESP32-D0WDQ6-V3 in m5paper)
   BLEDevice::init("");
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
@@ -385,10 +430,7 @@ void setup() {
   Serial.print("Current battery voltage: ");
   Serial.println(String(M5.getBatteryVoltage() / (float)1000));
   Serial.println("M5paper initialized.");
-  M5.EPD.SetRotation(1);  // Correct rotation for full vertical (portrait) display
-  M5.EPD.Clear(true);
-  canvas.createCanvas(540, 960);  // Correct full vertical canvas size
-  canvas.setTextSize(2);
+  setRotation();
   Serial.println("M5paper screen initialized.");
 
   canvas.drawString("Current battery " + String(int(getBatteryPercent() * 100)) + "% (" + String(M5.getBatteryVoltage() / (float)1000) + "v)", 10, 10);
@@ -451,6 +493,8 @@ void parseWiFiScan(uint16_t networksFound) {
 }
 
 void loop() {
+  checkButtons();
+
   while (GPS_Serial.available() > 0) {
     char c = GPS_Serial.read();
     gps.encode(c);
