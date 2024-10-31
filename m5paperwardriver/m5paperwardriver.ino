@@ -78,6 +78,51 @@ void mutexDebug(String msg="") {
   #endif
 }
 
+void setRotation(bool rotate = false) {
+  if (rotate) {
+    int temp = xmax;
+    xmax = ymax;
+    ymax = temp;
+    canvas.deleteCanvas();
+  }
+  if (xmax == 540) {
+    M5.EPD.SetRotation(90);  // Correct rotation for full vertical (portrait) display
+    M5.TP.SetRotation(90);
+  }
+  if (xmax == 960) {
+    M5.EPD.SetRotation(0);  // Correct rotation for full horizontal (landscape) display
+    M5.TP.SetRotation(0);
+  }
+  M5.EPD.Clear(true);
+  canvas.createCanvas(xmax, ymax);
+  canvas.setTextSize(2);
+}
+
+void checkButtons() {
+  if (M5.BtnL.wasPressed()) {
+    Serial.println("Btn L Pressed");
+    setRotation(true);
+  }
+  if (M5.BtnP.wasPressed()) {
+    Serial.println("Btn P Pressed");
+    setRotation(true);
+  }
+  if (M5.BtnR.wasPressed()) {
+    Serial.println("Btn R Pressed");
+    setRotation(true);
+  }
+  M5.BtnL.lastChange();
+  M5.update();
+}
+
+void idelay(int sleepytyme = 0) {
+  //interruptible delay will delay for the requested time while periodically checking for button input
+  for (int i = 0; i < sleepytyme; i+=50) {
+    delay(50);
+    checkButtons();
+  }
+}
+
 void battDebug(String msg="", float var=0) {
   #if BATTDEBUG == 1
   // Serial.printf("msg%d",var);
@@ -163,43 +208,6 @@ void drawHeader(int mNumWifi, int mNumBLE) {
   canvas.setTextSize(2);
 }
 
-void setRotation(bool rotate = false) {
-  if (rotate) {
-    int temp = xmax;
-    xmax = ymax;
-    ymax = temp;
-    canvas.deleteCanvas();
-  }
-  if (xmax == 540) {
-    M5.EPD.SetRotation(90);  // Correct rotation for full vertical (portrait) display
-    M5.TP.SetRotation(90);
-  }
-  if (xmax == 960) {
-    M5.EPD.SetRotation(0);  // Correct rotation for full horizontal (landscape) display
-    M5.TP.SetRotation(0);
-  }
-  M5.EPD.Clear(true);
-  canvas.createCanvas(xmax, ymax);
-  canvas.setTextSize(2);
-}
-
-void checkButtons() {
-  if (M5.BtnL.wasPressed()) {
-    Serial.println("Btn L Pressed");
-    setRotation(true);
-  }
-  if (M5.BtnP.wasPressed()) {
-    Serial.println("Btn P Pressed");
-    setRotation(true);
-  }
-  if (M5.BtnR.wasPressed()) {
-    Serial.println("Btn R Pressed");
-    setRotation(true);
-  }
-  M5.BtnL.lastChange();
-  M5.update();
-}
-
 void displayDevices() {
   int mNumWifi = 0;
   int mNumBLE = 0;
@@ -251,8 +259,7 @@ void displayDevices() {
         canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
         deviceListMutex.unlock();
         mutexDebug("Mutex released before sleep inside device display loop");
-        delay(3000);
-        checkButtons();
+        idelay(3000);
         deviceListMutex.lock();
         mutexDebug("Mutex reheld after sleep inside device displayloop");
         drawHeader(mNumWifi, mNumBLE);
@@ -426,7 +433,9 @@ void initializeScanning() {
 
 void setup() {
   //Serial.begin(115200); // part of M5.begin
-  M5.begin();
+  // Defaults begin(bool touchEnable = true, bool SDEnable = true, bool SerialEnable = true, bool BatteryADCEnable = true, bool I2CEnable = false)
+  // Disabling unused touch to save battery
+  M5.begin(false, true, true, true, false);
   Serial.print("Current battery voltage: ");
   Serial.println(String(M5.getBatteryVoltage() / (float)1000));
   Serial.println("M5paper initialized.");
