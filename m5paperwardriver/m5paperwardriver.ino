@@ -11,13 +11,12 @@
 #include "esp_sleep.h"
 #include <mutex>
 
-const String BUILD = "1.0.2";
+const String BUILD = "1.0.3";
 const String VERSION = "1.0";
 
 /* Slow debugging serial prints
  *  Set 0 to disable and 1 to enable
  */
-
 #define MUTEXDEBUG 0
 #define BATTDEBUG 0
 #define GPSDEBUG 0
@@ -44,6 +43,8 @@ M5EPD_Canvas canvas(&M5.EPD);
 
 HardwareSerial GPS_Serial(1);
 TinyGPSPlus gps;
+
+int64_t last_set_rtc = 0;
 
 struct GPSData {
   String time;
@@ -76,6 +77,24 @@ void mutexDebug(String msg="") {
   #if MUTEXDEBUG == 1
   Serial.println(msg);
   #endif
+}
+
+void setRTC() {
+  if (gps.date.isValid() && gps.time.isValid()) {
+    rtc_time_t RTCtime;
+    RTCtime.hour = gps.time.hour();
+    RTCtime.min  = gps.time.minute();
+    RTCtime.sec  = gps.time.second();
+    M5.RTC.setTime(&RTCtime);
+
+    rtc_date_t RTCDate;
+    RTCDate.year = gps.date.year();
+    RTCDate.mon  = gps.date.month();
+    RTCDate.day  = gps.date.day();
+    M5.RTC.setDate(&RTCDate);
+
+    last_set_rtc = esp_timer_get_time();
+  }
 }
 
 void setRotation(bool rotate = false) {
@@ -154,10 +173,13 @@ bool initSDCard() {
 }
 
 void logToCSV(const char* netid, const char* ssid, const char* authType, const char* time, int channel, int signal, double lat, double lon, double altitude, double accuracy, const char* type) {
-  if (logFile) {
-    logFile.printf("%s,\"%s\",%s,%s,%d,%d,%.6f,%.6f,%.2f,%.2f,%s\n",
-                   netid, ssid, authType, time, channel, signal, lat, lon, altitude, accuracy, type);
-    logFile.flush();
+  // Don't try to wrie if we don't even know what time it is
+  if (last_set_rtc != 0) {
+    if (logFile) {
+      logFile.printf("%s,\"%s\",%s,%s,%d,%d,%.6f,%.6f,%.2f,%.2f,%s\n",
+                    netid, ssid, authType, time, channel, signal, lat, lon, altitude, accuracy, type);
+      logFile.flush();
+    }
   }
 }
 
@@ -436,6 +458,7 @@ void setup() {
   // Defaults begin(bool touchEnable = true, bool SDEnable = true, bool SerialEnable = true, bool BatteryADCEnable = true, bool I2CEnable = false)
   // Disabling unused touch to save battery
   M5.begin(false, true, true, true, false);
+  M5.RTC.begin();
   Serial.print("Current battery voltage: ");
   Serial.println(String(M5.getBatteryVoltage() / (float)1000));
   Serial.println("M5paper initialized.");
