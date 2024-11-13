@@ -20,6 +20,7 @@ const String VERSION = "1.0";
 #define MUTEXDEBUG 0
 #define BATTDEBUG 0
 #define GPSDEBUG 0
+#define RTCDEBUG 0
 
 // Set timeouts in seconds for users
 const int display_timeout_s = 120;
@@ -37,7 +38,6 @@ const int BATT_DIFF = BATT_MAX - BATT_MIN;
 int xmax = 540;
 int ymax = 960;
 
-
 M5EPD_Canvas canvas(&M5.EPD);
 #define SD_CS_PIN 4
 
@@ -45,6 +45,8 @@ HardwareSerial GPS_Serial(1);
 TinyGPSPlus gps;
 
 int64_t last_set_rtc = 0;
+const int64_t set_rtc_every_s = 60 * 60; // Set RTC from GPS once per hour
+const int64_t set_rtc_every = set_rtc_every_s * S_TO_uS;
 
 struct GPSData {
   String time;
@@ -79,8 +81,18 @@ void mutexDebug(String msg="") {
   #endif
 }
 
+void rtcDebug(String msg="") {
+  #if RTCDEBUG == 1
+  Serial.println(msg);
+  #endif
+}
+
 void setRTC() {
+  #if GPSDEBUG == 1
+  rtcDebug("Checking for valid GPS signal...");
+  #endif
   if (gps.date.isValid() && gps.time.isValid()) {
+    rtcDebug("GPS Valid, setting time and date");
     rtc_time_t RTCtime;
     RTCtime.hour = gps.time.hour();
     RTCtime.min  = gps.time.minute();
@@ -94,6 +106,8 @@ void setRTC() {
     M5.RTC.setDate(&RTCDate);
 
     last_set_rtc = esp_timer_get_time();
+  } else {
+    rtcDebug("Unable to set RTC without valid GPS signal");
   }
 }
 
@@ -205,13 +219,13 @@ void drawHeader(int mNumWifi, int mNumBLE) {
 
   // Normal Info header
   String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
-  //canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Memory debugging Info header
   // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Runtime Duration Info header
-  canvas.drawString("Time: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  // canvas.drawString("Time: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Battery debugging Info header
   // canvas.drawString("BATT " + String(M5.getBatteryVoltage()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
@@ -530,6 +544,19 @@ void loop() {
   while (GPS_Serial.available() > 0) {
     char c = GPS_Serial.read();
     gps.encode(c);
+  }
+
+  if (last_set_rtc == 0) {
+    // RTC hasn't been set yet
+    rtcDebug("RTC never been set, attempting to set...");
+    setRTC();
+  } else if ( (last_set_rtc + set_rtc_every) < esp_timer_get_time() ) {
+    // RTC hasn't been set for a while
+    rtcDebug("RTC has not been set in a while, attempting to set...");
+    rtcDebug(String(last_set_rtc));
+    rtcDebug(String(set_rtc_every));
+    rtcDebug(String(esp_timer_get_time()));
+    setRTC();
   }
 
   #if GPSDEBUG == 1
