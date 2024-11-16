@@ -230,8 +230,6 @@ bool initSDCard() {
     if (!SD.exists(logFileName))
       break;
   }
-  Serial.println("Using logFileName");
-  Serial.println(logFileName);
   logFile = SD.open(logFileName, FILE_WRITE);
   if (!logFile) {
     Serial.println("Error opening log file!");
@@ -276,10 +274,6 @@ int channel_to_freq(int chan, int band=2) {
 }
 
 void logToCSV(const char* netid, const char* ssid, const char* authType, int channel, int signal, const char* type, const char* rcoi="", const char* mfgrid="") {
-  // Don't try to write if we don't even know what time it is
-  if (last_set_rtc == 0)
-    return;
-
   if (!logFile)
     return;
 
