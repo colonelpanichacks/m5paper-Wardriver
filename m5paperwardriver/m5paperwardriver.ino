@@ -11,8 +11,8 @@
 #include "esp_sleep.h"
 #include <mutex>
 
-const String BUILD = "1.0.3";
-const String VERSION = "1.0";
+const String BUILD = "1.0.4";
+const String VERSION = "1.1";
 
 /* Slow debugging serial prints
  *  Set 0 to disable and 1 to enable
@@ -20,6 +20,8 @@ const String VERSION = "1.0";
 #define MUTEXDEBUG 0
 #define BATTDEBUG 0
 #define GPSDEBUG 0
+#define RTCDEBUG 0
+#define GPSMUTEXDEBUG 0
 
 // Set timeouts in seconds for users
 const int display_timeout_s = 120;
@@ -37,17 +39,20 @@ const int BATT_DIFF = BATT_MAX - BATT_MIN;
 int xmax = 540;
 int ymax = 960;
 
-
 M5EPD_Canvas canvas(&M5.EPD);
 #define SD_CS_PIN 4
+int written_lines = 0;
+char last_flush[128] = "never";
 
 HardwareSerial GPS_Serial(1);
 TinyGPSPlus gps;
+std::mutex gpsMutex;
 
 int64_t last_set_rtc = 0;
+const int64_t set_rtc_every_s = 60 * 60; // Set RTC from GPS once per hour
+const int64_t set_rtc_every = set_rtc_every_s * S_TO_uS;
 
 struct GPSData {
-  String time;
   double latitude;
   double longitude;
   double altitude;
@@ -58,7 +63,6 @@ BLEScan* pBLEScan;
 int scanTime = 5;
 
 File logFile;
-String logFileName = "/WiFiScanLog.csv";
 
 struct Device {
   String type;
@@ -79,8 +83,59 @@ void mutexDebug(String msg="") {
   #endif
 }
 
+void rtcDebug(String msg="") {
+  #if RTCDEBUG == 1
+  Serial.println(msg);
+  #endif
+}
+
+void gpsMutexDebug(String msg="") {
+  #if GPSMUTEXDEBUG == 1
+  Serial.println(msg);
+  #endif
+}
+
+void updateGPS() {
+  gpsMutexDebug("Attempting to lock GPS Mutex");
+  gpsMutex.lock();
+  gpsMutexDebug("GPS mutex locked");
+  while (GPS_Serial.available() > 0) {
+    char c = GPS_Serial.read();
+    gps.encode(c);
+  }
+  gpsMutex.unlock();
+  gpsMutexDebug("GPS mutex unlocked");
+  if (last_set_rtc == 0) {
+    // RTC hasn't been set yet
+    rtcDebug("RTC never been set, attempting to set...");
+    setRTC();
+  } else if ( (last_set_rtc + set_rtc_every) < esp_timer_get_time() ) {
+    // RTC hasn't been set for a while
+    rtcDebug("RTC has not been set in a while, attempting to set...");
+    rtcDebug(String(last_set_rtc));
+    rtcDebug(String(set_rtc_every));
+    rtcDebug(String(esp_timer_get_time()));
+    setRTC();
+  }
+}
+
+GPSData getGPSData() {
+  GPSData gpsData;
+  char utc[21];
+  updateGPS();
+  gpsData.latitude = gps.location.lat();
+  gpsData.longitude = gps.location.lng();
+  gpsData.altitude = gps.altitude.meters();
+  gpsData.accuracy = gps.hdop.hdop();
+  return gpsData;
+}
+
 void setRTC() {
+  #if GPSDEBUG == 1
+  rtcDebug("Checking for valid GPS signal...");
+  #endif
   if (gps.date.isValid() && gps.time.isValid()) {
+    rtcDebug("GPS Valid, setting time and date");
     rtc_time_t RTCtime;
     RTCtime.hour = gps.time.hour();
     RTCtime.min  = gps.time.minute();
@@ -94,6 +149,8 @@ void setRTC() {
     M5.RTC.setDate(&RTCDate);
 
     last_set_rtc = esp_timer_get_time();
+  } else {
+    rtcDebug("Unable to set RTC without valid GPS signal");
   }
 }
 
@@ -152,8 +209,10 @@ void battDebug(String msg="", float var=0) {
 
 void writeCSVHeader() {
   if (logFile) {
-    logFile.println("WigleWifi-1.4,appRelease=" + BUILD + ",model=M5Paper,release=" + VERSION + ",device=M5Paper,display=ePaper,board=ESP32,brand=M5");
-    logFile.println("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type");
+    // https://api.wigle.net/csvFormat.html
+    // [Format version],appRelease=[version],model=[device model],release=[device release],device=[device name],display=[device display characteristics],board=[device board descriptor],brand=[device brand],star=[system star],body=[orbiting body index],subBody=[orbit index of sub-body]
+    logFile.println("WigleWifi-1.6,appRelease=" + BUILD + ",model=M5Paper,release=" + VERSION + ",device=M5Paper,display=EPD_ED047TC1,board=ESP32-D0WDQ6-V3,brand=M5Stack,Sol,3,0");
+    logFile.println("MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type");
     logFile.flush();
   }
 }
@@ -162,6 +221,14 @@ bool initSDCard() {
   if (!SD.begin(SD_CS_PIN)) {
     Serial.println("SD Card initialization failed!");
     return false;
+  }
+
+  String base_name = "/m5paperwardriver-wigle";
+  String logFileName = base_name + "0.csv";
+  for (int i = 0; i < 999999; i++) {
+    logFileName = base_name + i + ".csv";
+    if (!SD.exists(logFileName))
+      break;
   }
   logFile = SD.open(logFileName, FILE_WRITE);
   if (!logFile) {
@@ -172,14 +239,73 @@ bool initSDCard() {
   return true;
 }
 
-void logToCSV(const char* netid, const char* ssid, const char* authType, const char* time, int channel, int signal, double lat, double lon, double altitude, double accuracy, const char* type) {
-  // Don't try to wrie if we don't even know what time it is
-  if (last_set_rtc != 0) {
-    if (logFile) {
-      logFile.printf("%s,\"%s\",%s,%s,%d,%d,%.6f,%.6f,%.2f,%.2f,%s\n",
-                    netid, ssid, authType, time, channel, signal, lat, lon, altitude, accuracy, type);
-      logFile.flush();
-    }
+// band should be an enum but I don't know how
+int channel_to_freq(int chan, int band=2) {
+  // shamelessly adapted from https://github.com/torvalds/linux/blob/master/net/wireless/util.c
+  switch (band) {
+    case 2: // 2.4GHz
+      if (chan == 14)
+        return(2484);
+      else if (chan < 14)
+        return(2407 + (chan * 5));
+      break;
+    case 5: // 5GHz
+      if (chan >= 182 && chan <= 196)
+        return(4000 + (chan * 5));
+      else
+        return(5000 + (chan * 5));
+      break;
+    case 6: // 6GHz
+      if (chan == 2)
+        return(5935);
+      if (chan <= 233)
+        return(5950  + (chan * 5));
+      break;
+    case 60: // 60GHz
+      if (chan < 7)
+        return(56160 + (chan * 2160));
+      break;
+    //case 1: // S1G
+    //  return(902 + (chan * 0.5);
+    default:
+      ;
+  }
+  return 0;
+}
+
+void logToCSV(const char* netid, const char* ssid, const char* authType, int channel, int signal, const char* type, const char* rcoi="", const char* mfgrid="") {
+  if (!logFile)
+    return;
+
+  // 1.4
+  //logFile.printf("%s,\"%s\",%s,%s,%d,%d,%.6f,%.6f,%.2f,%.2f,%s\n",
+  //              netid, ssid, authType, time, channel, signal, lat, lon, altitude, accuracy, type);
+  // 1.6 added frequency, rcoi, mfgrid
+  int frequency = 0;
+
+  if (type == "BLE")
+    frequency = 7936;
+
+  if (type == "WiFi")
+    frequency = channel_to_freq(channel);
+
+  GPSData gpsData = getGPSData(); // this automatically gets the most update info from the gps and even sets time in RTC if needed
+  rtc_time_t RTCtime;
+  M5.RTC.getTime(&RTCtime);
+  rtc_date_t RTCDate;
+  M5.RTC.getDate(&RTCDate);
+  char time[128];
+  sprintf(time, "%04d-%02d-%02d %02d:%02d:%02d", RTCDate.year, RTCDate.mon, RTCDate.day, RTCtime.hour, RTCtime.min, RTCtime.sec);
+  logFile.printf("%s,\"%s\",%s,%s,%d,%d,%d,%.6f,%.6f,%.2f,%.2f,rcoi,mfgid,%s\n",
+                netid, ssid, authType, time, channel, channel_to_freq(channel), gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, rcoi, mfgrid, type);
+                // WiFi [BSSID],  [SSID],       [Capabilities],[First timestamp seen],[Channel],[Frequency],[RSSI],[Latitude],[Longitude],[Altitude],[Accuracy],[RCOIs],[MfgrId],[Type]
+                // BLE  [BD_ADDR],[Device Name],[Capabilities],[First timestamp seen],[Channel],[Frequency],[RSSI],[Latitude],[Longitude],[Altitude],[Accuracy],[RCOIs],[MfgrId],[Type]
+  written_lines ++;
+
+  // Slow down the flushing to a max of once per second.
+  if (time != last_flush) {
+    logFile.flush();
+    sprintf(last_flush, "%04d-%02d-%02d %02d:%02d:%02d", RTCDate.year, RTCDate.mon, RTCDate.day, RTCtime.hour, RTCtime.min, RTCtime.sec);
   }
 }
 
@@ -201,17 +327,23 @@ float getBatteryPercent() {
 
 void drawHeader(int mNumWifi, int mNumBLE) {
   canvas.fillCanvas(0);
-  canvas.setTextSize(3);
+  canvas.setTextSize(2);
 
   // Normal Info header
+  updateGPS();
   String gpsValid = gps.location.isValid() ? "Valid" : "Invalid";  // gps status for top text
-  //canvas.drawString("GPS: " + gpsValid + " | HDOP: " + String(gps.hdop.value()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  // Over 20 hdop is considered "poor" so there really isn't a need to show the default over 2000 that the gps reports
+  // Max it at 99 and add a + for when it's higher.  This prevents The UI from looking bad when location is invalid and HDOP is high.
+  String hdop = "99+";
+  if (gps.hdop.value() < 100)
+    hdop = String(gps.hdop.value());
+  canvas.drawString("GPS:" + gpsValid + " | HDOP:" + hdop + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Memory debugging Info header
   // canvas.drawString("Free " + String(esp_get_minimum_free_heap_size()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Runtime Duration Info header
-  canvas.drawString("Time: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
+  // canvas.drawString("Time: " + String(esp_timer_get_time() / S_TO_uS / 60 ) + "m | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
 
   // Battery debugging Info header
   // canvas.drawString("BATT " + String(M5.getBatteryVoltage()) + " | WiFi:" + String(mNumWifi) + " | BLE:" + String(mNumBLE), 10, 10);
@@ -301,18 +433,6 @@ void displayDevices() {
   canvas.pushCanvas(0, 0, UPDATE_MODE_DU);
 }
 
-GPSData getGPSData() {
-  GPSData gpsData;
-  char utc[21];
-  sprintf(utc, "%04d-%02d-%02d %02d:%02d:%02d", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
-  gpsData.time = String(utc);
-  gpsData.latitude = gps.location.lat();
-  gpsData.longitude = gps.location.lng();
-  gpsData.altitude = gps.altitude.meters();
-  gpsData.accuracy = gps.hdop.hdop();
-  return gpsData;
-}
-
 int magicIndex(const char* mac) {
   mutexDebug("Mutex held by mI mac match");
   for (int i = 0; i < max_devices; i++) {
@@ -398,8 +518,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     const char* mac = macStr.c_str();
     const char* ssid = ssidStr.c_str();
 
-    GPSData gpsData = getGPSData();
-    logToCSV(mac, ssid, "", gpsData.time.c_str(), 0, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "BLE");
+    logToCSV(mac, ssid, "[BLE]", 0, rssi, "BLE");
 
     int deviceIndex = magicIndex(mac);
     mutexDebug("Mutex held by BT Callback");
@@ -506,7 +625,7 @@ void parseWiFiScan(uint16_t networksFound) {
       const char* bssid = bssidStr.c_str();
       const char* encryption = encryptionStr.c_str();
 
-      logToCSV(bssid, ssid, encryption, gpsData.time.c_str(), channel, rssi, gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.accuracy, "WiFi");
+      logToCSV(bssid, ssid, encryption, channel, rssi, "WiFi");
 
       int deviceIndex = magicIndex(bssid);
       mutexDebug("Mutex held by wifi loop");
@@ -527,10 +646,7 @@ void parseWiFiScan(uint16_t networksFound) {
 void loop() {
   checkButtons();
 
-  while (GPS_Serial.available() > 0) {
-    char c = GPS_Serial.read();
-    gps.encode(c);
-  }
+  updateGPS();
 
   #if GPSDEBUG == 1
   if (!gps.location.isValid()) {
